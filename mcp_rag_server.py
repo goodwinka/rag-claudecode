@@ -40,6 +40,7 @@ VALID_CATEGORIES = [
     "concurrency", "memory", "security", "testing", "qt", "gui",
     "system", "reference", "tutorial", "cheatsheet",
     "math", "radar", "simulation", "3d",
+    "database", "devops", "ml",
 ]
 
 def _get_embedding_function():
@@ -143,14 +144,13 @@ async def list_tools() -> list[Tool]:
             name="search_docs",
             description=(
                 "Семантический поиск по базе знаний программирования. "
-                "Содержит: C, C++, Python, Qt, алгоритмы, структуры данных, "
-                "форматы файлов, паттерны проектирования, системное программирование. "
+                "Содержит: C, C++, Python, Go, Rust, TypeScript, Qt, "
+                "алгоритмы, сети, математика, радар/DSP, моделирование, 3D, "
+                "БД, DevOps, ML/AI, безопасность. "
                 "ОБЯЗАТЕЛЬНО вызывай перед написанием кода если: "
                 "1) используешь API библиотеки/фреймворка, "
                 "2) не уверен в синтаксисе или сигнатуре, "
-                "3) реализуешь алгоритм или структуру данных, "
-                "4) работаешь с Qt, "
-                "5) работаешь с форматами файлов или системными вызовами."
+                "3) реализуешь алгоритм или структуру данных."
             ),
             inputSchema={
                 "type": "object",
@@ -334,6 +334,36 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
+            name="search_databases",
+            description=(
+                "Поиск по базам данных и ORM: "
+                "SQL, PostgreSQL, Redis, SQLAlchemy, psycopg, "
+                "индексы, транзакции, миграции, оптимизация запросов."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Запрос по базам данных"}
+                },
+                "required": ["query"]
+            }
+        ),
+        Tool(
+            name="search_ml",
+            description=(
+                "Поиск по машинному обучению и AI: "
+                "PyTorch, scikit-learn, Transformers, тензоры, "
+                "обучение моделей, нейронные сети, NLP, autograd."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Запрос по ML/AI"}
+                },
+                "required": ["query"]
+            }
+        ),
+        Tool(
             name="kb_stats",
             description="Статистика базы знаний.",
             inputSchema={"type": "object", "properties": {}}
@@ -368,6 +398,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             "search_radar": _search_radar,
             "search_simulation": _search_simulation,
             "search_3d": _search_3d,
+            "search_databases": _search_databases,
+            "search_ml": _search_ml,
             "kb_stats": _kb_stats,
             "list_sources": _list_sources,
         }
@@ -571,6 +603,38 @@ async def _search_3d(args: dict) -> list[TextContent]:
     results = collection.query(
         query_texts=[f"3D rendering graphics: {query}"], n_results=TOP_K,
         where=_build_filter(category="3d"),
+        include=["documents", "metadatas", "distances"]
+    )
+    if not results["documents"][0] or results["distances"][0][0] > 1.2:
+        results = collection.query(
+            query_texts=[query], n_results=TOP_K,
+            include=["documents", "metadatas", "distances"]
+        )
+    return [TextContent(type="text", text=format_results(results, query))]
+
+
+async def _search_databases(args: dict) -> list[TextContent]:
+    query = args["query"]
+    collection = get_collection()
+    results = collection.query(
+        query_texts=[f"database SQL: {query}"], n_results=TOP_K,
+        where=_build_filter(category="database"),
+        include=["documents", "metadatas", "distances"]
+    )
+    if not results["documents"][0] or results["distances"][0][0] > 1.2:
+        results = collection.query(
+            query_texts=[query], n_results=TOP_K,
+            include=["documents", "metadatas", "distances"]
+        )
+    return [TextContent(type="text", text=format_results(results, query))]
+
+
+async def _search_ml(args: dict) -> list[TextContent]:
+    query = args["query"]
+    collection = get_collection()
+    results = collection.query(
+        query_texts=[f"machine learning neural network: {query}"], n_results=TOP_K,
+        where=_build_filter(category="ml"),
         include=["documents", "metadatas", "distances"]
     )
     if not results["documents"][0] or results["distances"][0][0] > 1.2:

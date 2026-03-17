@@ -21,18 +21,46 @@ from pathlib import Path
 
 import chromadb
 from chromadb.config import Settings
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
 # ─── Конфиг ──────────────────────────────────────────────────────
 
+SCRIPT_DIR_CFG = Path(__file__).resolve().parent
 DB_PATH = os.environ.get(
     "RAG_DB_PATH",
-    str(Path.home() / ".rag-knowledge-base" / "chroma_db")
+    str(SCRIPT_DIR_CFG / "chroma_db")
 )
 COLLECTION_NAME = os.environ.get("RAG_COLLECTION", "programming_docs")
 CHUNK_SIZE = int(os.environ.get("RAG_CHUNK_SIZE", "1200"))
 CHUNK_OVERLAP = int(os.environ.get("RAG_CHUNK_OVERLAP", "150"))
 
-SCRIPT_DIR = Path(__file__).resolve().parent
+# ─── GPU/CPU эмбеддинги ───────────────────────────────────────────
+
+def get_embedding_function():
+    """Создаёт функцию эмбеддингов с GPU если доступно."""
+    device = "cpu"
+    try:
+        import torch
+        if torch.cuda.is_available():
+            device = "cuda"
+            gpu_name = torch.cuda.get_device_name(0)
+            print(f"  🎮 GPU: {gpu_name}")
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+            print("  🎮 GPU: Apple MPS")
+        else:
+            print("  💻 GPU недоступен, используется CPU")
+    except ImportError:
+        pass
+
+    model = os.environ.get("RAG_EMBED_MODEL", "all-MiniLM-L6-v2")
+    return SentenceTransformerEmbeddingFunction(
+        model_name=model,
+        device=device,
+        normalize_embeddings=True,
+    )
+
+SCRIPT_DIR = SCRIPT_DIR_CFG
 KNOWLEDGE_DIR = SCRIPT_DIR / "knowledge"
 
 CODE_EXT = {
@@ -138,6 +166,11 @@ def detect_metadata_from_path(filepath: Path) -> dict:
                 "qt": ("cpp", "qt"),
                 "algorithms": ("", "algorithm"),
                 "technical": ("", "system"),
+                "networking": ("", "networking"),
+                "math": ("", "math"),
+                "radar": ("", "radar"),
+                "simulation": ("", "simulation"),
+                "3d": ("", "3d"),
             }
             if cat_dir in cat_map:
                 lang, cat = cat_map[cat_dir]
@@ -310,8 +343,11 @@ def main():
             print("Коллекция не существует.")
         return
 
+    ef = get_embedding_function()
     collection = client.get_or_create_collection(
-        name=COLLECTION_NAME, metadata={"hnsw:space": "cosine"}
+        name=COLLECTION_NAME,
+        metadata={"hnsw:space": "cosine"},
+        embedding_function=ef,
     )
 
     if args.stats:

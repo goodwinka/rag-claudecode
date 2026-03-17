@@ -9,3 +9,6 @@ tiktoken>=0.7.0
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
 markdownify>=0.13.0
+# GPU поддержка — torch устанавливается отдельно через setup.sh
+# CPU-only: pip install torch --index-url https://download.pytorch.org/whl/cpu
+# CUDA 12.x: pip install torch --index-url https://download.pytorch.org/whl/cu121

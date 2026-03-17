@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from mcp.server import Server
-from mcp.server.stdio import run_server
+from mcp.server.stdio import stdio_server
 from mcp.types import Tool, TextContent
 
 import chromadb
@@ -744,7 +744,8 @@ def _build_filter(language: str = "", category: str = "") -> dict | None:
 # ─── Запуск ──────────────────────────────────────────────────────
 
 async def main():
-    await run_server(app)
+    async with stdio_server() as (read_stream, write_stream):
+        await app.run(read_stream, write_stream, app.create_initialization_options())
 
 if __name__ == "__main__":
     import asyncio

@@ -16,12 +16,14 @@ from mcp.types import Tool, TextContent
 
 import chromadb
 from chromadb.config import Settings
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
 # ─── Конфигурация ────────────────────────────────────────────────
 
+_SCRIPT_DIR = Path(__file__).resolve().parent
 DB_PATH = os.environ.get(
     "RAG_DB_PATH",
-    str(Path.home() / ".rag-knowledge-base" / "chroma_db")
+    str(_SCRIPT_DIR / "chroma_db")
 )
 COLLECTION_NAME = os.environ.get("RAG_COLLECTION", "programming_docs")
 TOP_K = int(os.environ.get("RAG_TOP_K", "10"))
@@ -37,7 +39,26 @@ VALID_CATEGORIES = [
     "file-format", "build-system", "project-structure", "networking",
     "concurrency", "memory", "security", "testing", "qt", "gui",
     "system", "reference", "tutorial", "cheatsheet",
+    "math", "radar", "simulation", "3d",
 ]
+
+def _get_embedding_function():
+    """Создаёт функцию эмбеддингов с GPU если доступно."""
+    device = "cpu"
+    try:
+        import torch
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+    except ImportError:
+        pass
+    model = os.environ.get("RAG_EMBED_MODEL", "all-MiniLM-L6-v2")
+    return SentenceTransformerEmbeddingFunction(
+        model_name=model,
+        device=device,
+        normalize_embeddings=True,
+    )
 
 # ─── Инициализация ───────────────────────────────────────────────
 
@@ -62,7 +83,8 @@ def get_collection():
     )
     _collection = _client.get_or_create_collection(
         name=COLLECTION_NAME,
-        metadata={"hnsw:space": "cosine"}
+        metadata={"hnsw:space": "cosine"},
+        embedding_function=_get_embedding_function(),
     )
     return _collection
 
@@ -235,6 +257,83 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
+            name="search_networking",
+            description=(
+                "Поиск по сетевым протоколам и программированию: "
+                "TCP/IP, UDP, HTTP/2/3, QUIC, TLS, DNS, WebSocket, gRPC, "
+                "MQTT, сокеты, epoll, сетевой стек, системный дизайн."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Сетевой запрос"}
+                },
+                "required": ["query"]
+            }
+        ),
+        Tool(
+            name="search_math",
+            description=(
+                "Поиск по математике, линейной алгебре и геометрии: "
+                "векторы, матрицы, кватернионы, численные методы, "
+                "интерполяция, FFT, статистика, оптимизация."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Математический запрос"}
+                },
+                "required": ["query"]
+            }
+        ),
+        Tool(
+            name="search_radar",
+            description=(
+                "Поиск по радиолокации, DSP и обработке сигналов: "
+                "FFT, фильтры (FIR/IIR), радарное уравнение, CFAR, "
+                "доплеровский эффект, SDR, GNU Radio, pulse compression."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Запрос по радару/DSP"}
+                },
+                "required": ["query"]
+            }
+        ),
+        Tool(
+            name="search_simulation",
+            description=(
+                "Поиск по моделированию и симуляции: "
+                "численное интегрирование ОДУ (RK4, Эйлер), "
+                "физические движки (Box2D, Bullet), метод конечных элементов, "
+                "дискретно-событийная симуляция, Taichi, Monte Carlo."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Запрос по моделированию"}
+                },
+                "required": ["query"]
+            }
+        ),
+        Tool(
+            name="search_3d",
+            description=(
+                "Поиск по 3D моделированию и рендерингу: "
+                "OpenGL, Vulkan, GLSL/HLSL шейдеры, ray tracing, "
+                "форматы (OBJ, FBX, glTF), Assimp, GLM, BVH, "
+                "трансформации, нормали, UV-маппинг, PBR."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Запрос по 3D/рендерингу"}
+                },
+                "required": ["query"]
+            }
+        ),
+        Tool(
             name="kb_stats",
             description="Статистика базы знаний.",
             inputSchema={"type": "object", "properties": {}}
@@ -264,6 +363,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             "search_algorithm": _search_algorithm,
             "search_qt": _search_qt,
             "search_technical": _search_technical,
+            "search_networking": _search_networking,
+            "search_math": _search_math,
+            "search_radar": _search_radar,
+            "search_simulation": _search_simulation,
+            "search_3d": _search_3d,
             "kb_stats": _kb_stats,
             "list_sources": _list_sources,
         }
@@ -383,6 +487,98 @@ async def _search_technical(args: dict) -> list[TextContent]:
 
     combined = {"documents": [all_docs], "metadatas": [all_metas], "distances": [all_dists]}
     return [TextContent(type="text", text=format_results(combined, query))]
+
+
+async def _search_networking(args: dict) -> list[TextContent]:
+    query = args["query"]
+    collection = get_collection()
+    results = collection.query(
+        query_texts=[f"network protocol: {query}"], n_results=TOP_K,
+        where=_build_filter(category="networking"),
+        include=["documents", "metadatas", "distances"]
+    )
+    if not results["documents"][0] or results["distances"][0][0] > 1.2:
+        results = collection.query(
+            query_texts=[query], n_results=TOP_K,
+            include=["documents", "metadatas", "distances"]
+        )
+    return [TextContent(type="text", text=format_results(results, query))]
+
+
+async def _search_math(args: dict) -> list[TextContent]:
+    query = args["query"]
+    collection = get_collection()
+    results = collection.query(
+        query_texts=[f"mathematics geometry: {query}"], n_results=TOP_K,
+        where=_build_filter(category="math"),
+        include=["documents", "metadatas", "distances"]
+    )
+    if not results["documents"][0] or results["distances"][0][0] > 1.2:
+        results = collection.query(
+            query_texts=[query], n_results=TOP_K,
+            include=["documents", "metadatas", "distances"]
+        )
+    return [TextContent(type="text", text=format_results(results, query))]
+
+
+async def _search_radar(args: dict) -> list[TextContent]:
+    query = args["query"]
+    collection = get_collection()
+    # Ищем по radar + signal processing
+    all_docs, all_metas, all_dists = [], [], []
+    for cat in ["radar", "signal-processing"]:
+        res = collection.query(
+            query_texts=[f"radar signal processing DSP: {query}"],
+            n_results=TOP_K // 2,
+            where=_build_filter(category=cat),
+            include=["documents", "metadatas", "distances"]
+        )
+        if res["documents"] and res["documents"][0]:
+            all_docs.extend(res["documents"][0])
+            all_metas.extend(res["metadatas"][0])
+            all_dists.extend(res["distances"][0])
+    if not all_docs:
+        res = collection.query(
+            query_texts=[query], n_results=TOP_K,
+            include=["documents", "metadatas", "distances"]
+        )
+        all_docs = res["documents"][0]
+        all_metas = res["metadatas"][0]
+        all_dists = res["distances"][0]
+    combined = {"documents": [all_docs], "metadatas": [all_metas], "distances": [all_dists]}
+    return [TextContent(type="text", text=format_results(combined, query))]
+
+
+async def _search_simulation(args: dict) -> list[TextContent]:
+    query = args["query"]
+    collection = get_collection()
+    results = collection.query(
+        query_texts=[f"simulation modeling physics: {query}"], n_results=TOP_K,
+        where=_build_filter(category="simulation"),
+        include=["documents", "metadatas", "distances"]
+    )
+    if not results["documents"][0] or results["distances"][0][0] > 1.2:
+        results = collection.query(
+            query_texts=[query], n_results=TOP_K,
+            include=["documents", "metadatas", "distances"]
+        )
+    return [TextContent(type="text", text=format_results(results, query))]
+
+
+async def _search_3d(args: dict) -> list[TextContent]:
+    query = args["query"]
+    collection = get_collection()
+    results = collection.query(
+        query_texts=[f"3D rendering graphics: {query}"], n_results=TOP_K,
+        where=_build_filter(category="3d"),
+        include=["documents", "metadatas", "distances"]
+    )
+    if not results["documents"][0] or results["distances"][0][0] > 1.2:
+        results = collection.query(
+            query_texts=[query], n_results=TOP_K,
+            include=["documents", "metadatas", "distances"]
+        )
+    return [TextContent(type="text", text=format_results(results, query))]
 
 
 # ─── Батчевое получение метаданных ───────────────────────────────

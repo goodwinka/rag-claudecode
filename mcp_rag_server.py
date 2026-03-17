@@ -1,0 +1,491 @@
+#!/usr/bin/env python3
+"""
+MCP-сервер для RAG-поиска по базе знаний программирования.
+Поддерживает: C, C++, Python, Qt, алгоритмы, техническая документация.
+"""
+
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Any
+
+from mcp.server import Server
+from mcp.server.stdio import run_server
+from mcp.types import Tool, TextContent
+
+import chromadb
+from chromadb.config import Settings
+
+# ─── Конфигурация ────────────────────────────────────────────────
+
+DB_PATH = os.environ.get(
+    "RAG_DB_PATH",
+    str(Path.home() / ".rag-knowledge-base" / "chroma_db")
+)
+COLLECTION_NAME = os.environ.get("RAG_COLLECTION", "programming_docs")
+TOP_K = int(os.environ.get("RAG_TOP_K", "10"))
+MAX_DISTANCE = float(os.environ.get("RAG_MAX_DISTANCE", "1.5"))
+
+VALID_LANGUAGES = [
+    "c", "cpp", "python", "javascript", "typescript", "rust", "go",
+    "java", "kotlin", "swift", "csharp", "php", "ruby", "lua",
+    "bash", "sql", "qml",
+]
+VALID_CATEGORIES = [
+    "stdlib", "framework", "algorithm", "data-structure", "pattern",
+    "file-format", "build-system", "project-structure", "networking",
+    "concurrency", "memory", "security", "testing", "qt", "gui",
+    "system", "reference", "tutorial", "cheatsheet",
+]
+
+# ─── Инициализация ───────────────────────────────────────────────
+
+app = Server("rag-knowledge-base")
+
+_client = None
+_collection = None
+
+def get_collection():
+    global _client, _collection
+    if _collection is not None:
+        try:
+            _collection.count()
+            return _collection
+        except Exception:
+            _collection = None
+            _client = None
+
+    _client = chromadb.PersistentClient(
+        path=DB_PATH,
+        settings=Settings(anonymized_telemetry=False)
+    )
+    _collection = _client.get_or_create_collection(
+        name=COLLECTION_NAME,
+        metadata={"hnsw:space": "cosine"}
+    )
+    return _collection
+
+
+def format_results(results, query: str, show_source: bool = True) -> str:
+    """Форматировать результаты поиска."""
+    if not results["documents"] or not results["documents"][0]:
+        return f"По запросу «{query}» ничего не найдено в базе знаний."
+
+    parts = [f"# Результаты: {query}\n"]
+    seen = set()
+
+    for doc, meta, dist in zip(
+        results["documents"][0],
+        results["metadatas"][0],
+        results["distances"][0]
+    ):
+        if dist > MAX_DISTANCE:
+            continue
+
+        # Дедупликация
+        doc_hash = hash(doc[:200])
+        if doc_hash in seen:
+            continue
+        seen.add(doc_hash)
+
+        source = meta.get("source", "")
+        lang = meta.get("language", "")
+        category = meta.get("category", "")
+        relevance = max(0, round((1 - dist) * 100, 1))
+
+        header = f"## [{source}]" if show_source else "##"
+        tags = []
+        if lang:
+            tags.append(lang)
+        if category:
+            tags.append(category)
+        tag_str = f" ({', '.join(tags)})" if tags else ""
+
+        parts.append(f"{header}{tag_str} — {relevance}%")
+        parts.append(doc)
+        parts.append("---\n")
+
+    if len(parts) <= 1:
+        return f"По запросу «{query}» нет достаточно релевантных результатов."
+
+    return "\n".join(parts)
+
+
+# ─── Определение инструментов ────────────────────────────────────
+
+@app.list_tools()
+async def list_tools() -> list[Tool]:
+    return [
+        Tool(
+            name="search_docs",
+            description=(
+                "Семантический поиск по базе знаний программирования. "
+                "Содержит: C, C++, Python, Qt, алгоритмы, структуры данных, "
+                "форматы файлов, паттерны проектирования, системное программирование. "
+                "ОБЯЗАТЕЛЬНО вызывай перед написанием кода если: "
+                "1) используешь API библиотеки/фреймворка, "
+                "2) не уверен в синтаксисе или сигнатуре, "
+                "3) реализуешь алгоритм или структуру данных, "
+                "4) работаешь с Qt, "
+                "5) работаешь с форматами файлов или системными вызовами."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Поисковый запрос на естественном языке"
+                    },
+                    "language": {
+                        "type": "string",
+                        "description": f"Фильтр по языку: {', '.join(VALID_LANGUAGES)}",
+                        "default": ""
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": f"Фильтр по категории: {', '.join(VALID_CATEGORIES)}",
+                        "default": ""
+                    },
+                    "n_results": {
+                        "type": "integer",
+                        "description": "Количество результатов (1-20, по умолчанию 10)",
+                        "default": 10
+                    }
+                },
+                "required": ["query"]
+            }
+        ),
+        Tool(
+            name="search_api",
+            description=(
+                "Поиск по API-справочникам: функции, классы, методы, сигнатуры. "
+                "Используй когда нужна точная сигнатура функции или метода."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Имя функции/класса/метода или описание"
+                    },
+                    "language": {
+                        "type": "string",
+                        "description": "Язык программирования",
+                        "default": ""
+                    }
+                },
+                "required": ["query"]
+            }
+        ),
+        Tool(
+            name="search_algorithm",
+            description=(
+                "Поиск алгоритмов и структур данных: сортировка, графы, "
+                "деревья, динамическое программирование, оценка сложности."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Описание алгоритма или задачи"
+                    },
+                    "language": {
+                        "type": "string",
+                        "description": "Язык для примеров кода",
+                        "default": ""
+                    }
+                },
+                "required": ["query"]
+            }
+        ),
+        Tool(
+            name="search_qt",
+            description=(
+                "Поиск по документации Qt: виджеты, сигналы/слоты, "
+                "QML, модели, сеть, многопоточность, графика."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Запрос по Qt"
+                    }
+                },
+                "required": ["query"]
+            }
+        ),
+        Tool(
+            name="search_technical",
+            description=(
+                "Поиск технической информации: форматы файлов, "
+                "структуры проектов, системы сборки, сетевые протоколы."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Технический запрос"
+                    }
+                },
+                "required": ["query"]
+            }
+        ),
+        Tool(
+            name="kb_stats",
+            description="Статистика базы знаний.",
+            inputSchema={"type": "object", "properties": {}}
+        ),
+        Tool(
+            name="list_sources",
+            description="Список всех источников в базе знаний.",
+            inputSchema={"type": "object", "properties": {}}
+        ),
+    ]
+
+
+@app.call_tool()
+async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
+    try:
+        collection = get_collection()
+        if collection.count() == 0 and name.startswith("search"):
+            return [TextContent(type="text", text=(
+                "⚠️ База знаний пуста!\n"
+                "Запустите: python ingest.py --load-all\n"
+                "Или: ./setup.sh"
+            ))]
+
+        handlers = {
+            "search_docs": _search_docs,
+            "search_api": _search_api,
+            "search_algorithm": _search_algorithm,
+            "search_qt": _search_qt,
+            "search_technical": _search_technical,
+            "kb_stats": _kb_stats,
+            "list_sources": _list_sources,
+        }
+        handler = handlers.get(name)
+        if not handler:
+            return [TextContent(type="text", text=f"Неизвестный инструмент: {name}")]
+        return await handler(arguments)
+    except Exception as e:
+        return [TextContent(type="text", text=f"Ошибка: {type(e).__name__}: {e}")]
+
+
+async def _search_docs(args: dict) -> list[TextContent]:
+    query = args["query"]
+    language = args.get("language", "").lower().strip()
+    category = args.get("category", "").lower().strip()
+    n = min(args.get("n_results", TOP_K), 20)
+
+    where = _build_filter(language=language, category=category)
+    collection = get_collection()
+    results = collection.query(
+        query_texts=[query], n_results=n,
+        where=where, include=["documents", "metadatas", "distances"]
+    )
+    return [TextContent(type="text", text=format_results(results, query))]
+
+
+async def _search_api(args: dict) -> list[TextContent]:
+    query = args["query"]
+    language = args.get("language", "").lower().strip()
+    where = _build_filter(language=language, category="reference")
+
+    collection = get_collection()
+    results = collection.query(
+        query_texts=[f"API reference: {query}"],
+        n_results=TOP_K, where=where,
+        include=["documents", "metadatas", "distances"]
+    )
+    # Если мало результатов — искать шире
+    if not results["documents"][0] or len(results["documents"][0]) < 2:
+        results = collection.query(
+            query_texts=[query], n_results=TOP_K,
+            where=_build_filter(language=language),
+            include=["documents", "metadatas", "distances"]
+        )
+    return [TextContent(type="text", text=format_results(results, query))]
+
+
+async def _search_algorithm(args: dict) -> list[TextContent]:
+    query = args["query"]
+    language = args.get("language", "").lower().strip()
+
+    where_filters = [
+        _build_filter(category="algorithm"),
+        _build_filter(category="data-structure"),
+    ]
+
+    collection = get_collection()
+    all_docs, all_metas, all_dists = [], [], []
+    for wf in where_filters:
+        res = collection.query(
+            query_texts=[query], n_results=TOP_K // 2,
+            where=wf, include=["documents", "metadatas", "distances"]
+        )
+        if res["documents"] and res["documents"][0]:
+            all_docs.extend(res["documents"][0])
+            all_metas.extend(res["metadatas"][0])
+            all_dists.extend(res["distances"][0])
+
+    # Также поищем по всей базе
+    res2 = collection.query(
+        query_texts=[f"algorithm: {query}"], n_results=TOP_K // 2,
+        include=["documents", "metadatas", "distances"]
+    )
+    if res2["documents"] and res2["documents"][0]:
+        all_docs.extend(res2["documents"][0])
+        all_metas.extend(res2["metadatas"][0])
+        all_dists.extend(res2["distances"][0])
+
+    combined = {"documents": [all_docs], "metadatas": [all_metas], "distances": [all_dists]}
+    return [TextContent(type="text", text=format_results(combined, query))]
+
+
+async def _search_qt(args: dict) -> list[TextContent]:
+    query = args["query"]
+    collection = get_collection()
+
+    results = collection.query(
+        query_texts=[f"Qt: {query}"], n_results=TOP_K,
+        where=_build_filter(category="qt"),
+        include=["documents", "metadatas", "distances"]
+    )
+    if not results["documents"][0] or results["distances"][0][0] > 1.2:
+        results = collection.query(
+            query_texts=[f"Qt {query}"], n_results=TOP_K,
+            include=["documents", "metadatas", "distances"]
+        )
+    return [TextContent(type="text", text=format_results(results, query))]
+
+
+async def _search_technical(args: dict) -> list[TextContent]:
+    query = args["query"]
+    collection = get_collection()
+
+    tech_cats = ["file-format", "build-system", "project-structure", "system", "networking"]
+    all_docs, all_metas, all_dists = [], [], []
+
+    for cat in tech_cats:
+        res = collection.query(
+            query_texts=[query], n_results=3,
+            where=_build_filter(category=cat),
+            include=["documents", "metadatas", "distances"]
+        )
+        if res["documents"] and res["documents"][0]:
+            all_docs.extend(res["documents"][0])
+            all_metas.extend(res["metadatas"][0])
+            all_dists.extend(res["distances"][0])
+
+    combined = {"documents": [all_docs], "metadatas": [all_metas], "distances": [all_dists]}
+    return [TextContent(type="text", text=format_results(combined, query))]
+
+
+# ─── Батчевое получение метаданных ───────────────────────────────
+
+_BATCH_SIZE = 5000
+
+def _iter_metadatas(collection, total: int = 0):
+    """Итерирует метаданные батчами, обходя лимит SQL переменных ChromaDB."""
+    if total == 0:
+        total = collection.count()
+    for offset in range(0, total, _BATCH_SIZE):
+        batch = collection.get(
+            include=["metadatas"],
+            limit=_BATCH_SIZE,
+            offset=offset,
+        )
+        yield batch["metadatas"]
+
+
+async def _kb_stats(args: dict) -> list[TextContent]:
+    collection = get_collection()
+    count = collection.count()
+    if count == 0:
+        return [TextContent(type="text", text="База знаний пуста.")]
+
+    sources, languages, categories = {}, {}, {}
+    for batch_meta in _iter_metadatas(collection, count):
+        for m in batch_meta:
+            s = m.get("source", "?")
+            sources[s] = sources.get(s, 0) + 1
+            l = m.get("language", "")
+            if l:
+                languages[l] = languages.get(l, 0) + 1
+            c = m.get("category", "")
+            if c:
+                categories[c] = categories.get(c, 0) + 1
+
+    lines = [
+        f"# Статистика базы знаний\n",
+        f"Всего чанков: **{count}**\n",
+        f"## Языки",
+    ]
+    for l, c in sorted(languages.items(), key=lambda x: -x[1]):
+        lines.append(f"- {l}: {c}")
+
+    lines.append(f"\n## Категории")
+    for c, n in sorted(categories.items(), key=lambda x: -x[1]):
+        lines.append(f"- {c}: {n}")
+
+    lines.append(f"\n## Источники ({len(sources)})")
+    for s, c in sorted(sources.items()):
+        lines.append(f"- {s}: {c}")
+
+    return [TextContent(type="text", text="\n".join(lines))]
+
+
+async def _list_sources(args: dict) -> list[TextContent]:
+    collection = get_collection()
+    count = collection.count()
+    if count == 0:
+        return [TextContent(type="text", text="База знаний пуста.")]
+
+    sources = {}
+    for batch_meta in _iter_metadatas(collection, count):
+        for m in batch_meta:
+            key = m.get("source", "?")
+            if key not in sources:
+                sources[key] = {"count": 0, "lang": set(), "cat": set()}
+            sources[key]["count"] += 1
+            if m.get("language"):
+                sources[key]["lang"].add(m["language"])
+            if m.get("category"):
+                sources[key]["cat"].add(m["category"])
+
+    lines = ["# Источники в базе знаний\n"]
+    for s, info in sorted(sources.items()):
+        langs = ", ".join(sorted(info["lang"])) or "—"
+        cats = ", ".join(sorted(info["cat"])) or "—"
+        lines.append(f"- **{s}** — {info['count']} чанков | {langs} | {cats}")
+
+    return [TextContent(type="text", text="\n".join(lines))]
+
+
+def _build_filter(language: str = "", category: str = "") -> dict | None:
+    conditions = []
+    if language:
+        conditions.append({"language": language})
+    if category:
+        conditions.append({"category": category})
+
+    if len(conditions) == 0:
+        return None
+    elif len(conditions) == 1:
+        return conditions[0]
+    else:
+        return {"$and": conditions}
+
+
+# ─── Запуск ──────────────────────────────────────────────────────
+
+async def main():
+    await run_server(app)
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())

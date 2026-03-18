@@ -21,8 +21,10 @@ FPGA/Xilinx (VHDL, Verilog, HLS, AXI), ГИС/геопространственн
 - `search_databases`   — базы данных: SQL, PostgreSQL, Redis, ORM, индексы, транзакции
 - `search_ml`          — машинное обучение: PyTorch, scikit-learn, Transformers, NLP
 - `search_fpga`        — FPGA/HDL: VHDL, Verilog, Xilinx Vitis HLS, PYNQ, AXI, cocotb, Yosys
-- `search_geo`         — ГИС: GeoJSON, Shapefile, GeoTIFF, KML, GDAL, PROJ, GeoPandas, PostGIS, STAC
-- `search_space`       — Космос: орбитальная механика, SGP4/TLE, Astropy, CCSDS, NASA cFS, ArduPilot, Cesium
+- `search_geo`         — ГИС: GeoJSON, Shapefile, GeoTIFF/libgeotiff, KML, GDAL, PROJ, GeoPandas, PostGIS, STAC, xarray/rioxarray, morecantile
+- `search_space`       — Космос/Луна: орбитальная механика, SGP4/TLE, Astropy, CCSDS, NASA cFS, ArduPilot, Cesium,
+                         ISIS3, Ames Stereo Pipeline, pds4/pvl (LOLA DEM), PROJ IAU Moon (IAU_2015:30100),
+                         селенографические координаты, цилиндрические проекции, cartopy, pymap3d
 
 ## Когда ОБЯЗАТЕЛЬНО вызывать поиск
 
@@ -43,6 +45,8 @@ FPGA/Xilinx (VHDL, Verilog, HLS, AXI), ГИС/геопространственн
 15. Работаешь с FPGA, HDL, Xilinx, Vitis HLS, AXI, PYNQ — `search_fpga`
 16. Работаешь с геоданными, ГИС, картами, координатными системами — `search_geo`
 17. Работаешь с орбитами, спутниками, БПЛА, авионикой, космосом — `search_space`
+18. Работаешь с лунными данными (LRO LOLA DEM, PDS форматы, ISIS3) — `search_space`
+19. Нужны селенографические координаты, PROJ IAU Moon CRS, картографические проекции — `search_space`
 
 ## Правила
 

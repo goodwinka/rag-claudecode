@@ -863,11 +863,34 @@ do_geo() {
     # stackstac — анализ спутниковых данных (STAC + xarray + Dask)
     dl "https://github.com/gjoseph92/stackstac"         "docs"          "stackstac Satellite"   python "geo"
 
+    # --- GeoTIFF формат (детально) ---
+    # libgeotiff — C библиотека тегов GeoTIFF (EPSG коды, проекции, CRS в TIFF файлах)
+    # Описывает: GTModelTypeGeoKey, ProjectedCSTypeGeoKey, ProjLinearUnitsGeoKey и т.д.
+    dl "https://github.com/OSGeo/libgeotiff"            "libgeotiff/docs" "libgeotiff Format"   c  "geo"
+    # cogeotiff/cog-spec — Cloud Optimized GeoTIFF: IFD, overviews, tiling, HTTP range requests
+    # (уже добавлен выше, продублируем с category geo для поиска)
+
+    # --- N-мерные растровые массивы (DEM / мультиспектральные данные) ---
+    # xarray — N-D labeled arrays (стандарт для работы с NetCDF, GeoTIFF, GRIB, DEM)
+    dl "https://github.com/pydata/xarray"               "doc"           "xarray N-D Arrays"     python "geo"
+    # rioxarray — rasterio + xarray: чтение GeoTIFF в xarray с CRS, clip, reproject
+    dl "https://github.com/corteva/rioxarray"           "docs"          "rioxarray GeoTIFF+xr"  python "geo"
+    # zarr — формат чанкованных N-D массивов (облачное хранение растров, DEM)
+    dl "https://github.com/zarr-developers/zarr-python" "docs"          "Zarr Chunked Arrays"   python "geo"
+
+    # --- Тайловые сетки и проекции ---
+    # morecantile — тайловые сетки (TMS, WMTS) для любой CRS, в т.ч. планетарных (Луна, Марс)
+    dl "https://github.com/developmentseed/morecantile" "docs"          "morecantile Tile Grid" python "geo"
+    # pyproj CRS examples — IAU планетарные CRS (Луна: IAU_2015:30100, Марс: IAU_2015:49900)
+    # (уже добавлен pyproj выше)
+
     # --- Высоты / Рельеф ---
     # elevation — загрузка SRTM/DEM данных рельефа
     dl "https://github.com/bopen/elevation"             ""              "DEM Elevation Data"    python "geo"
     # richdem — анализ цифровых моделей рельефа (DEM analysis)
     dl "https://github.com/r-barnes/richdem"            "docs"          "RichDEM Analysis"      cpp "geo"
+    # terracotta — облачный тайловый сервер растров (GeoTIFF → XYZ тайлы)
+    dl "https://github.com/DHI/terracotta"              "docs"          "Terracotta Raster Srv" python "geo"
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -961,6 +984,126 @@ do_space() {
 }
 
 # ═══════════════════════════════════════════════════════════════════
+#  Планетарные данные / Луна / LRO LOLA / Проекции
+# ═══════════════════════════════════════════════════════════════════
+
+do_planetary() {
+    echo -e "\n🌑 ══════ Planetary Data / Moon / LRO LOLA / Projections ══════"
+
+    # ── PDS форматы (именно в них распространяется LOLA DEM) ──────────────
+
+    # pvl — PDS Label Language: парсер .lbl/.LBL файлов NASA PDS3 и PDS4
+    # Структура: ^IMAGE, OBJECT=IMAGE, LINE_SAMPLES, SAMPLE_TYPE, MAP_PROJECTION_TYPE...
+    dl "https://github.com/planetarypy/pvl"             ""              "PVL PDS Label Parser"  python "space"
+
+    # pds4-tools — чтение PDS4 XML-меток и бинарных продуктов (LOLA, LRO, Cassini)
+    # Поддерживает: Array_2D_Image, Table_Binary, Map_Projection
+    dl "https://github.com/Small-Bodies-Node/pds4_tools" ""             "PDS4 Tools NASA"       python "space"
+
+    # pds-tools — утилиты для работы с NASA PDS данными (поиск, загрузка)
+    dl "https://github.com/planetarypy/pds-tools"       ""              "PDS Tools NASA"        python "space" 2>/dev/null || \
+        echo "  ℹ pds-tools: pip install pds-tools"
+
+    # ── ISIS3 / USGS Astrogeology ──────────────────────────────────────────
+
+    # ISIS3 — Integrated Software for Imagers and Spectrometers (USGS)
+    # Обрабатывает LRO NAC/WAC, LROC, Clementine, Chandrayaan
+    # Селенографические проекции: sinusoidal, equirectangular, polar stereographic
+    # Форматы: .cub (ISIS cube), ISIS label, PDS ingestion (lroc2isis, lronac2isis)
+    dl "https://github.com/USGS-Astrogeology/ISIS3"     "docs"          "ISIS3 Planetary Proc"  cpp "space"
+
+    # autocnet — контрольные сети для планетарных снимков (обёртка ISIS3)
+    dl "https://github.com/USGS-Astrogeology/autocnet"  "docs"          "AutoCNet Control Net"  python "space"
+
+    # knoten — Community Sensor Model (CSM) для планетарных снимков
+    dl "https://github.com/USGS-Astrogeology/knoten"    ""              "Knoten CSM Sensors"    python "space"
+
+    # ── Ames Stereo Pipeline (ASP) ────────────────────────────────────────
+
+    # ASP — генерация DEM из стерео снимков LRO NAC, CTX (Mars), HiRISE
+    # Алгоритмы: SGM, BM, MGM стерео; результат — облако точек → GeoTIFF DEM
+    # Форматы вывода: GeoTIFF, PDS, PC (point cloud), .tif с GeoTIFF тегами
+    dl "https://github.com/NeoGeographyToolkit/StereoPipeline" "docs"   "Ames Stereo Pipeline"  cpp "space"
+
+    # ── Планетарная картография (проекции) ───────────────────────────────
+
+    # PROJ — координатные трансформации, включая IAU планетарные CRS:
+    #   Луна:  IAU_2015:30100 (Moon 2015, selenographic)
+    #   Марс:  IAU_2015:49900
+    # Цилиндрические проекции: +proj=eqc, +proj=sinu, +proj=merc, +proj=cea
+    # Полярные: +proj=stere (Lunar South/North Pole)
+    dl "https://github.com/OSGeo/PROJ"                  "docs/source/operations" "PROJ Projections Ref" cpp "space"
+
+    # PROJ data — сетки datum shift, включая планетарные тела
+    dl "https://github.com/OSGeo/PROJ-data"             ""              "PROJ Datum Grids"      "" "space"
+
+    # planetcantile / morecantile — TMS тайловые схемы для Луны (WMTS)
+    # Позволяет создавать XYZ тайлы в произвольной проекции (IAU Moon CRS)
+    dl "https://github.com/developmentseed/morecantile" "docs"          "Tile Grids Moon/Mars"  python "space"
+
+    # ── Селенографические координаты и эфемериды ─────────────────────────
+
+    # SpiceyPy — IAU_MOON frame, selenographic lat/lon, LOLA радиус
+    # Ключевые ядра: moon_pa_de421_1900-2050.bpc, pck00010.tpc (Moon radii/rotation)
+    dl "https://github.com/AndrewAnnex/SpiceyPy"        "docs"          "SpiceyPy Moon Frame"   python "space"
+
+    # lunarpy / moonphases — фазы Луны, положение, либрация
+    dl "https://github.com/akkana/scripts"              ""              "Moon Scripts (akkana)" python "space" 2>/dev/null || \
+        echo "  ℹ moon position: astropy.coordinates.get_body('moon', time)"
+
+    # ── Обработка лунных данных ───────────────────────────────────────────
+
+    # VICAR (Video Image Communication And Retrieval) — NASA/JPL система обработки
+    # Используется для LRO, Clementine, Cassini. Формат .vic/.vicar
+    dl "https://github.com/NASA-AMMOS/VICAR"            ""              "NASA VICAR Image Proc" "" "space"
+
+    # GDAL — читает LOLA GeoTIFF и PDS форматы (драйвер PDS, ISIS2/ISIS3, LabelRaster)
+    # Ключевые команды: gdalinfo lola_dem.tif, gdal_translate, gdalwarp -t_srs "+proj=..."
+    dl "https://github.com/OSGeo/gdal"                  "doc"           "GDAL Planetary Raster" cpp "space"
+
+    # ── Визуализация лунных данных ────────────────────────────────────────
+
+    # OpenPlanetaryMap — тайловые серверы и карты для Луны и Марса
+    dl "https://github.com/openplanetary/opm"           ""              "OpenPlanetary Map"     "" "space"
+
+    # MMGIS — NASA Multi-Mission GIS (Moon Trek, Mars Trek)
+    dl "https://github.com/NASA-AMMOS/MMGIS"            "docs"          "NASA Moon Trek GIS"    "" "space"
+
+    # Cesium — 3D отображение лунных DEM и тайлов (Moon terrain provider)
+    # Поддерживает LRO LOLA Hillshade tiles, WMS/WMTS лунные слои
+    dl "https://github.com/CesiumGS/cesium"             "Documentation" "Cesium Moon 3D Viewer" typescript "space"
+
+    # ── Цилиндрические и специальные проекции ────────────────────────────
+
+    # cartopy — картографические проекции в Python (Mollweide, Orthographic,
+    # Robinson, cylindrical equirectangular для планетарных карт)
+    dl "https://github.com/SciTools/cartopy"            "docs"          "Cartopy Map Projections" python "space"
+
+    # pymap3d — 3D геодезия: ECI↔ECEF↔LLA↔LVLH, азимут/угол места, дальность
+    # Поддерживает произвольные планетарные тела (радиус + сжатие)
+    dl "https://github.com/scivision/pymap3d"           "docs"          "pymap3d Coordinates"   python "space"
+
+    # ── Численные DEM инструменты ─────────────────────────────────────────
+
+    # geopandas с поддержкой растров через rioxarray
+    # Уклоны, экспозиция, водосборные бассейны на лунных DEM
+    dl "https://github.com/corteva/rioxarray"           "docs"          "rioxarray Moon DEM"    python "space"
+
+    # WhiteboxTools — анализ рельефа (slope, aspect, hillshade, watershed)
+    # Работает с GeoTIFF включая лунные DEM
+    dl "https://github.com/jblindsay/whitebox-tools"    "manual"        "WhiteboxTools DEM"     "" "space"
+
+    # ── Планетарная наука (общее) ─────────────────────────────────────────
+
+    # planetarypy — Python инструменты для планетарных данных (LOLA, HiRISE, CTX)
+    dl "https://github.com/planetarypy/planetarypy"     ""              "PlanetaryPy Science"   python "space"
+
+    # planetary-data-utils — утилиты поиска и загрузки PDS данных
+    dl "https://github.com/europlanet-gmap/planetary-data-utils" ""     "Planetary Data Utils"  python "space" 2>/dev/null || \
+        echo "  ℹ planetary-data-utils: pip install planetary-data-utils"
+}
+
+# ═══════════════════════════════════════════════════════════════════
 #  ML / AI
 # ═══════════════════════════════════════════════════════════════════
 
@@ -1012,7 +1155,10 @@ show_help() {
     echo "  security     OWASP Top 10, Book of Secret Knowledge"
     echo "  ml           PyTorch, scikit-learn, HuggingFace Transformers, nanoGPT"
     echo "  geo          GDAL, PROJ, GeoPandas, Shapely, GeoJSON, KML, GPX, PostGIS, MapLibre, STAC"
+    echo "               libgeotiff, xarray, rioxarray, morecantile, zarr, terracotta"
     echo "  space        Astropy, Poliastro, SGP4, SpiceyPy, NASA cFS, F Prime, MAVLink, ArduPilot, Cesium"
+    echo "  planetary    ISIS3, Ames Stereo Pipeline, pds4-tools, pvl, VICAR, PROJ IAU Moon,"
+    echo "               cartopy, pymap3d, WhiteboxTools, OpenPlanetaryMap, rioxarray (Moon DEM)"
     echo ""
     echo "  all          Всё вышеперечисленное"
     echo ""
@@ -1021,6 +1167,7 @@ show_help() {
     echo "  $0 networking radar      # Сети + радар"
     echo "  $0 fpga                  # FPGA / Xilinx"
     echo "  $0 geo space             # ГИС + Космос"
+    echo "  $0 planetary             # Луна, LRO LOLA, ISIS3, PDS, проекции"
     echo "  $0 fileformats           # Форматы файлов"
     echo "  $0 all                   # Всё"
 }
@@ -1048,6 +1195,7 @@ run_set() {
         ml|ai)                        do_ml ;;
         geo|gis|geospatial)           do_geo ;;
         space|aerospace|lunar|moon)   do_space ;;
+        planetary|planet|lola|lro|moon-data) do_planetary ;;
         all)
             do_python
             do_cpp
@@ -1070,6 +1218,7 @@ run_set() {
             do_ml
             do_geo
             do_space
+            do_planetary
             ;;
         *)
             echo "⚠ Неизвестный набор: $1"

@@ -175,6 +175,9 @@ def detect_metadata_from_path(filepath: Path) -> dict:
                 "devops": ("", "devops"),
                 "security": ("", "security"),
                 "ml": ("python", "ml"),
+                "fpga": ("", "fpga"),
+                "geo": ("", "geo"),
+                "space": ("", "space"),
             }
             if cat_dir in cat_map:
                 lang, cat = cat_map[cat_dir]

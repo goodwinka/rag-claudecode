@@ -42,6 +42,7 @@ VALID_CATEGORIES = [
     "system", "reference", "tutorial", "cheatsheet",
     "math", "radar", "simulation", "3d",
     "database", "devops", "ml",
+    "fpga", "geo", "space",
 ]
 
 _embedding_function = None
@@ -387,6 +388,63 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
+            name="search_fpga",
+            description=(
+                "Поиск по FPGA, HDL и программированию Xilinx/AMD: "
+                "VHDL, Verilog, SystemVerilog, Vitis HLS (C++ → RTL), "
+                "PYNQ (Python на Zynq), AXI4/AXI-Lite/AXI-Stream интерфейсы, "
+                "DMA, IP cores, синтез (Yosys), симуляция (GHDL, Icarus, Verilator), "
+                "тестирование (cocotb, VUnit), формальная верификация, "
+                "RISC-V на FPGA (PicoRV32, VexRiscv), SDR на FPGA."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Запрос по FPGA/HDL/Xilinx"}
+                },
+                "required": ["query"]
+            }
+        ),
+        Tool(
+            name="search_geo",
+            description=(
+                "Поиск по геопространственным данным и ГИС: "
+                "форматы (GeoJSON, Shapefile, GeoTIFF, KML/KMZ, GPX, PMTiles, GeoParquet), "
+                "GDAL, PROJ, координатные системы (WGS84, UTM, CRS), "
+                "GeoPandas, Shapely, Rasterio, Fiona, PostGIS, SpatiaLite, "
+                "тайлы (MapLibre, Leaflet, MVT, STAC), ДЗЗ (Sentinel, спутниковые данные), "
+                "трансформации координат, анализ рельефа (DEM), картографические проекции."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Запрос по ГИС/геоданным"}
+                },
+                "required": ["query"]
+            }
+        ),
+        Tool(
+            name="search_space",
+            description=(
+                "Поиск по аэрокосмическим технологиям: "
+                "орбитальная механика (Kepler, Lambert, Холман, SGP4, TLE), "
+                "Astropy, Poliastro, Skyfield, SpiceyPy (NAIF SPICE), "
+                "CCSDS протоколы (Space Packet, TM, TC, AOS), "
+                "NASA cFS, F Prime (Ingenuity), OpenMCT, "
+                "автопилоты БПЛА (ArduPilot, PX4, MAVLink, MAVSDK), "
+                "Луна (LOLA DEM, лунная геометрия SPICE), "
+                "CFD аэродинамика (OpenFOAM, SU2), визуализация (Cesium, Rerun), "
+                "наземные станции, спутниковая связь, GR Satellites."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Запрос по космосу/аэрокосмосу"}
+                },
+                "required": ["query"]
+            }
+        ),
+        Tool(
             name="kb_stats",
             description="Статистика базы знаний.",
             inputSchema={"type": "object", "properties": {}}
@@ -424,6 +482,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             "search_3d": _search_3d,
             "search_databases": _search_databases,
             "search_ml": _search_ml,
+            "search_fpga": _search_fpga,
+            "search_geo": _search_geo,
+            "search_space": _search_space,
             "kb_stats": _kb_stats,
             "list_sources": _list_sources,
         }
@@ -680,6 +741,70 @@ async def _search_ml(args: dict) -> list[TextContent]:
         collection,
         query_texts=[f"machine learning neural network: {query}"], n_results=TOP_K,
         where=_build_filter(category="ml"),
+        include=["documents", "metadatas", "distances"]
+    )
+    if not results["documents"][0] or results["distances"][0][0] > 1.2:
+        results = await _query_collection(
+            collection,
+            query_texts=[query], n_results=TOP_K,
+            include=["documents", "metadatas", "distances"]
+        )
+    return [TextContent(type="text", text=format_results(results, query))]
+
+
+async def _search_fpga(args: dict) -> list[TextContent]:
+    query = args["query"]
+    collection = await _get_collection_async()
+    results = await _query_collection(
+        collection,
+        query_texts=[f"FPGA HDL VHDL Verilog Xilinx: {query}"], n_results=TOP_K,
+        where=_build_filter(category="fpga"),
+        include=["documents", "metadatas", "distances"]
+    )
+    if not results["documents"][0] or results["distances"][0][0] > 1.2:
+        results = await _query_collection(
+            collection,
+            query_texts=[query], n_results=TOP_K,
+            include=["documents", "metadatas", "distances"]
+        )
+    return [TextContent(type="text", text=format_results(results, query))]
+
+
+async def _search_geo(args: dict) -> list[TextContent]:
+    query = args["query"]
+    collection = await _get_collection_async()
+    all_docs, all_metas, all_dists = [], [], []
+    for cat in ["geo", "file-format"]:
+        res = await _query_collection(
+            collection,
+            query_texts=[f"GIS geospatial geodata: {query}"], n_results=TOP_K // 2,
+            where=_build_filter(category=cat),
+            include=["documents", "metadatas", "distances"]
+        )
+        if res["documents"] and res["documents"][0]:
+            all_docs.extend(res["documents"][0])
+            all_metas.extend(res["metadatas"][0])
+            all_dists.extend(res["distances"][0])
+    if not all_docs:
+        res = await _query_collection(
+            collection,
+            query_texts=[query], n_results=TOP_K,
+            include=["documents", "metadatas", "distances"]
+        )
+        all_docs = res["documents"][0]
+        all_metas = res["metadatas"][0]
+        all_dists = res["distances"][0]
+    combined = {"documents": [all_docs], "metadatas": [all_metas], "distances": [all_dists]}
+    return [TextContent(type="text", text=format_results(combined, query))]
+
+
+async def _search_space(args: dict) -> list[TextContent]:
+    query = args["query"]
+    collection = await _get_collection_async()
+    results = await _query_collection(
+        collection,
+        query_texts=[f"aerospace orbital space satellite: {query}"], n_results=TOP_K,
+        where=_build_filter(category="space"),
         include=["documents", "metadatas", "distances"]
     )
     if not results["documents"][0] or results["distances"][0][0] > 1.2:

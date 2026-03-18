@@ -16,19 +16,29 @@ dl() {
     local repo=$(basename "$url" .git)
     local target="$DOCS/$repo"
     echo -e "\n📥 $name..."
+    local needs_ingest=1
     if [ -d "$target" ]; then
+        local old_head new_head
+        old_head=$(cd "$target" && git rev-parse HEAD 2>/dev/null)
         (cd "$target" && git pull --quiet 2>/dev/null) || true
+        new_head=$(cd "$target" && git rev-parse HEAD 2>/dev/null)
+        if [ "$old_head" = "$new_head" ]; then
+            echo "  ✓ up to date, skip ingest"
+            needs_ingest=0
+        fi
     else
         git clone --depth 1 --quiet "$url" "$target" 2>/dev/null || { echo "  ⚠ clone failed: $url"; return; }
     fi
-    local path="$target"
-    [ -n "$sub" ] && path="$target/$sub"
-    if [ -d "$path" ]; then
-        local extra_args=""
-        [ -n "$cat" ] && extra_args="--category $cat"
-        "$VENV" "$INGEST" --path "$path" --source "$name" --language "$lang" $extra_args || echo "  ⚠ ingest failed"
-    else
-        echo "  ⚠ path not found: $path"
+    if [ "$needs_ingest" -eq 1 ]; then
+        local path="$target"
+        [ -n "$sub" ] && path="$target/$sub"
+        if [ -d "$path" ]; then
+            local extra_args=""
+            [ -n "$cat" ] && extra_args="--category $cat"
+            "$VENV" "$INGEST" --path "$path" --source "$name" --language "$lang" $extra_args || echo "  ⚠ ingest failed"
+        else
+            echo "  ⚠ path not found: $path"
+        fi
     fi
 }
 
@@ -38,8 +48,16 @@ dl_sparse() {
     local repo=$(basename "$url" .git)
     local target="$DOCS/$repo"
     echo -e "\n📥 $name (sparse: $sub)..."
+    local needs_ingest=1
     if [ -d "$target/$sub" ]; then
+        local old_head new_head
+        old_head=$(cd "$target" && git rev-parse HEAD 2>/dev/null)
         (cd "$target" && git pull --quiet 2>/dev/null) || true
+        new_head=$(cd "$target" && git rev-parse HEAD 2>/dev/null)
+        if [ "$old_head" = "$new_head" ]; then
+            echo "  ✓ up to date, skip ingest"
+            needs_ingest=0
+        fi
     else
         rm -rf "$target"
         mkdir -p "$target"
@@ -54,13 +72,15 @@ dl_sparse() {
             { echo "  ⚠ sparse clone failed: $url"; return; }
         )
     fi
-    local path="$target/$sub"
-    if [ -d "$path" ]; then
-        local extra_args=""
-        [ -n "$cat" ] && extra_args="--category $cat"
-        "$VENV" "$INGEST" --path "$path" --source "$name" --language "$lang" $extra_args || echo "  ⚠ ingest failed"
-    else
-        echo "  ⚠ path not found: $path"
+    if [ "$needs_ingest" -eq 1 ]; then
+        local path="$target/$sub"
+        if [ -d "$path" ]; then
+            local extra_args=""
+            [ -n "$cat" ] && extra_args="--category $cat"
+            "$VENV" "$INGEST" --path "$path" --source "$name" --language "$lang" $extra_args || echo "  ⚠ ingest failed"
+        else
+            echo "  ⚠ path not found: $path"
+        fi
     fi
 }
 

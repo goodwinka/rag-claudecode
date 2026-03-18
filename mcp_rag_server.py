@@ -4,6 +4,7 @@ MCP-сервер для RAG-поиска по базе знаний програ
 Поддерживает: C, C++, Python, Qt, алгоритмы, техническая документация.
 """
 
+import asyncio
 import json
 import os
 import sys
@@ -43,8 +44,13 @@ VALID_CATEGORIES = [
     "database", "devops", "ml",
 ]
 
+_embedding_function = None
+
 def _get_embedding_function():
-    """Создаёт функцию эмбеддингов с GPU если доступно."""
+    """Создаёт и кеширует функцию эмбеддингов с GPU если доступно."""
+    global _embedding_function
+    if _embedding_function is not None:
+        return _embedding_function
     device = "cpu"
     try:
         import torch
@@ -55,11 +61,12 @@ def _get_embedding_function():
     except ImportError:
         pass
     model = os.environ.get("RAG_EMBED_MODEL", "all-MiniLM-L6-v2")
-    return SentenceTransformerEmbeddingFunction(
+    _embedding_function = SentenceTransformerEmbeddingFunction(
         model_name=model,
         device=device,
         normalize_embeddings=True,
     )
+    return _embedding_function
 
 # ─── Инициализация ───────────────────────────────────────────────
 
@@ -88,6 +95,22 @@ def get_collection():
         embedding_function=_get_embedding_function(),
     )
     return _collection
+
+
+async def _query_collection(collection, **kwargs) -> dict:
+    """Запускает блокирующий chromadb.query() в thread pool.
+
+    Необходимо, так как chromadb >= 0.5 использует внутренний httpx-клиент
+    для общения с embedded-сервером. Вызов синхронного httpx из async-
+    контекста конфликтует с event loop и приводит к
+    RuntimeError: cannot send a request as the client has been closed.
+    """
+    return await asyncio.to_thread(collection.query, **kwargs)
+
+
+async def _get_collection_async() -> Any:
+    """Возвращает коллекцию, инициализируя её в thread pool при необходимости."""
+    return await asyncio.to_thread(get_collection)
 
 
 def format_results(results, query: str, show_source: bool = True) -> str:
@@ -379,8 +402,9 @@ async def list_tools() -> list[Tool]:
 @app.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     try:
-        collection = get_collection()
-        if collection.count() == 0 and name.startswith("search"):
+        collection = await _get_collection_async()
+        count = await asyncio.to_thread(collection.count)
+        if count == 0 and name.startswith("search"):
             return [TextContent(type="text", text=(
                 "⚠️ База знаний пуста!\n"
                 "Запустите: python ingest.py --load-all\n"
@@ -418,8 +442,9 @@ async def _search_docs(args: dict) -> list[TextContent]:
     n = min(args.get("n_results", TOP_K), 20)
 
     where = _build_filter(language=language, category=category)
-    collection = get_collection()
-    results = collection.query(
+    collection = await _get_collection_async()
+    results = await _query_collection(
+        collection,
         query_texts=[query], n_results=n,
         where=where, include=["documents", "metadatas", "distances"]
     )
@@ -431,15 +456,17 @@ async def _search_api(args: dict) -> list[TextContent]:
     language = args.get("language", "").lower().strip()
     where = _build_filter(language=language, category="reference")
 
-    collection = get_collection()
-    results = collection.query(
+    collection = await _get_collection_async()
+    results = await _query_collection(
+        collection,
         query_texts=[f"API reference: {query}"],
         n_results=TOP_K, where=where,
         include=["documents", "metadatas", "distances"]
     )
     # Если мало результатов — искать шире
     if not results["documents"][0] or len(results["documents"][0]) < 2:
-        results = collection.query(
+        results = await _query_collection(
+            collection,
             query_texts=[query], n_results=TOP_K,
             where=_build_filter(language=language),
             include=["documents", "metadatas", "distances"]
@@ -456,10 +483,11 @@ async def _search_algorithm(args: dict) -> list[TextContent]:
         _build_filter(category="data-structure"),
     ]
 
-    collection = get_collection()
+    collection = await _get_collection_async()
     all_docs, all_metas, all_dists = [], [], []
     for wf in where_filters:
-        res = collection.query(
+        res = await _query_collection(
+            collection,
             query_texts=[query], n_results=TOP_K // 2,
             where=wf, include=["documents", "metadatas", "distances"]
         )
@@ -469,7 +497,8 @@ async def _search_algorithm(args: dict) -> list[TextContent]:
             all_dists.extend(res["distances"][0])
 
     # Также поищем по всей базе
-    res2 = collection.query(
+    res2 = await _query_collection(
+        collection,
         query_texts=[f"algorithm: {query}"], n_results=TOP_K // 2,
         include=["documents", "metadatas", "distances"]
     )
@@ -484,15 +513,17 @@ async def _search_algorithm(args: dict) -> list[TextContent]:
 
 async def _search_qt(args: dict) -> list[TextContent]:
     query = args["query"]
-    collection = get_collection()
+    collection = await _get_collection_async()
 
-    results = collection.query(
+    results = await _query_collection(
+        collection,
         query_texts=[f"Qt: {query}"], n_results=TOP_K,
         where=_build_filter(category="qt"),
         include=["documents", "metadatas", "distances"]
     )
     if not results["documents"][0] or results["distances"][0][0] > 1.2:
-        results = collection.query(
+        results = await _query_collection(
+            collection,
             query_texts=[f"Qt {query}"], n_results=TOP_K,
             include=["documents", "metadatas", "distances"]
         )
@@ -501,13 +532,14 @@ async def _search_qt(args: dict) -> list[TextContent]:
 
 async def _search_technical(args: dict) -> list[TextContent]:
     query = args["query"]
-    collection = get_collection()
+    collection = await _get_collection_async()
 
     tech_cats = ["file-format", "build-system", "project-structure", "system", "networking"]
     all_docs, all_metas, all_dists = [], [], []
 
     for cat in tech_cats:
-        res = collection.query(
+        res = await _query_collection(
+            collection,
             query_texts=[query], n_results=3,
             where=_build_filter(category=cat),
             include=["documents", "metadatas", "distances"]
@@ -523,14 +555,16 @@ async def _search_technical(args: dict) -> list[TextContent]:
 
 async def _search_networking(args: dict) -> list[TextContent]:
     query = args["query"]
-    collection = get_collection()
-    results = collection.query(
+    collection = await _get_collection_async()
+    results = await _query_collection(
+        collection,
         query_texts=[f"network protocol: {query}"], n_results=TOP_K,
         where=_build_filter(category="networking"),
         include=["documents", "metadatas", "distances"]
     )
     if not results["documents"][0] or results["distances"][0][0] > 1.2:
-        results = collection.query(
+        results = await _query_collection(
+            collection,
             query_texts=[query], n_results=TOP_K,
             include=["documents", "metadatas", "distances"]
         )
@@ -539,14 +573,16 @@ async def _search_networking(args: dict) -> list[TextContent]:
 
 async def _search_math(args: dict) -> list[TextContent]:
     query = args["query"]
-    collection = get_collection()
-    results = collection.query(
+    collection = await _get_collection_async()
+    results = await _query_collection(
+        collection,
         query_texts=[f"mathematics geometry: {query}"], n_results=TOP_K,
         where=_build_filter(category="math"),
         include=["documents", "metadatas", "distances"]
     )
     if not results["documents"][0] or results["distances"][0][0] > 1.2:
-        results = collection.query(
+        results = await _query_collection(
+            collection,
             query_texts=[query], n_results=TOP_K,
             include=["documents", "metadatas", "distances"]
         )
@@ -555,11 +591,12 @@ async def _search_math(args: dict) -> list[TextContent]:
 
 async def _search_radar(args: dict) -> list[TextContent]:
     query = args["query"]
-    collection = get_collection()
+    collection = await _get_collection_async()
     # Ищем по radar + signal processing
     all_docs, all_metas, all_dists = [], [], []
     for cat in ["radar", "signal-processing"]:
-        res = collection.query(
+        res = await _query_collection(
+            collection,
             query_texts=[f"radar signal processing DSP: {query}"],
             n_results=TOP_K // 2,
             where=_build_filter(category=cat),
@@ -570,7 +607,8 @@ async def _search_radar(args: dict) -> list[TextContent]:
             all_metas.extend(res["metadatas"][0])
             all_dists.extend(res["distances"][0])
     if not all_docs:
-        res = collection.query(
+        res = await _query_collection(
+            collection,
             query_texts=[query], n_results=TOP_K,
             include=["documents", "metadatas", "distances"]
         )
@@ -583,14 +621,16 @@ async def _search_radar(args: dict) -> list[TextContent]:
 
 async def _search_simulation(args: dict) -> list[TextContent]:
     query = args["query"]
-    collection = get_collection()
-    results = collection.query(
+    collection = await _get_collection_async()
+    results = await _query_collection(
+        collection,
         query_texts=[f"simulation modeling physics: {query}"], n_results=TOP_K,
         where=_build_filter(category="simulation"),
         include=["documents", "metadatas", "distances"]
     )
     if not results["documents"][0] or results["distances"][0][0] > 1.2:
-        results = collection.query(
+        results = await _query_collection(
+            collection,
             query_texts=[query], n_results=TOP_K,
             include=["documents", "metadatas", "distances"]
         )
@@ -599,14 +639,16 @@ async def _search_simulation(args: dict) -> list[TextContent]:
 
 async def _search_3d(args: dict) -> list[TextContent]:
     query = args["query"]
-    collection = get_collection()
-    results = collection.query(
+    collection = await _get_collection_async()
+    results = await _query_collection(
+        collection,
         query_texts=[f"3D rendering graphics: {query}"], n_results=TOP_K,
         where=_build_filter(category="3d"),
         include=["documents", "metadatas", "distances"]
     )
     if not results["documents"][0] or results["distances"][0][0] > 1.2:
-        results = collection.query(
+        results = await _query_collection(
+            collection,
             query_texts=[query], n_results=TOP_K,
             include=["documents", "metadatas", "distances"]
         )
@@ -615,14 +657,16 @@ async def _search_3d(args: dict) -> list[TextContent]:
 
 async def _search_databases(args: dict) -> list[TextContent]:
     query = args["query"]
-    collection = get_collection()
-    results = collection.query(
+    collection = await _get_collection_async()
+    results = await _query_collection(
+        collection,
         query_texts=[f"database SQL: {query}"], n_results=TOP_K,
         where=_build_filter(category="database"),
         include=["documents", "metadatas", "distances"]
     )
     if not results["documents"][0] or results["distances"][0][0] > 1.2:
-        results = collection.query(
+        results = await _query_collection(
+            collection,
             query_texts=[query], n_results=TOP_K,
             include=["documents", "metadatas", "distances"]
         )
@@ -631,14 +675,16 @@ async def _search_databases(args: dict) -> list[TextContent]:
 
 async def _search_ml(args: dict) -> list[TextContent]:
     query = args["query"]
-    collection = get_collection()
-    results = collection.query(
+    collection = await _get_collection_async()
+    results = await _query_collection(
+        collection,
         query_texts=[f"machine learning neural network: {query}"], n_results=TOP_K,
         where=_build_filter(category="ml"),
         include=["documents", "metadatas", "distances"]
     )
     if not results["documents"][0] or results["distances"][0][0] > 1.2:
-        results = collection.query(
+        results = await _query_collection(
+            collection,
             query_texts=[query], n_results=TOP_K,
             include=["documents", "metadatas", "distances"]
         )
@@ -649,12 +695,13 @@ async def _search_ml(args: dict) -> list[TextContent]:
 
 _BATCH_SIZE = 5000
 
-def _iter_metadatas(collection, total: int = 0):
-    """Итерирует метаданные батчами, обходя лимит SQL переменных ChromaDB."""
+async def _iter_metadatas_async(collection, total: int = 0):
+    """Итерирует метаданные батчами в thread pool, обходя лимит SQL переменных ChromaDB."""
     if total == 0:
-        total = collection.count()
+        total = await asyncio.to_thread(collection.count)
     for offset in range(0, total, _BATCH_SIZE):
-        batch = collection.get(
+        batch = await asyncio.to_thread(
+            collection.get,
             include=["metadatas"],
             limit=_BATCH_SIZE,
             offset=offset,
@@ -663,13 +710,13 @@ def _iter_metadatas(collection, total: int = 0):
 
 
 async def _kb_stats(args: dict) -> list[TextContent]:
-    collection = get_collection()
-    count = collection.count()
+    collection = await _get_collection_async()
+    count = await asyncio.to_thread(collection.count)
     if count == 0:
         return [TextContent(type="text", text="База знаний пуста.")]
 
     sources, languages, categories = {}, {}, {}
-    for batch_meta in _iter_metadatas(collection, count):
+    async for batch_meta in _iter_metadatas_async(collection, count):
         for m in batch_meta:
             s = m.get("source", "?")
             sources[s] = sources.get(s, 0) + 1
@@ -700,13 +747,13 @@ async def _kb_stats(args: dict) -> list[TextContent]:
 
 
 async def _list_sources(args: dict) -> list[TextContent]:
-    collection = get_collection()
-    count = collection.count()
+    collection = await _get_collection_async()
+    count = await asyncio.to_thread(collection.count)
     if count == 0:
         return [TextContent(type="text", text="База знаний пуста.")]
 
     sources = {}
-    for batch_meta in _iter_metadatas(collection, count):
+    async for batch_meta in _iter_metadatas_async(collection, count):
         for m in batch_meta:
             key = m.get("source", "?")
             if key not in sources:
@@ -744,9 +791,13 @@ def _build_filter(language: str = "", category: str = "") -> dict | None:
 # ─── Запуск ──────────────────────────────────────────────────────
 
 async def main():
+    # Прогреваем коллекцию и embedding-модель до старта сервера.
+    # Это гарантирует, что httpx-клиент chromadb и загрузка модели
+    # происходят в thread pool и не конфликтуют с event loop MCP.
+    await asyncio.to_thread(get_collection)
+
     async with stdio_server() as (read_stream, write_stream):
         await app.run(read_stream, write_stream, app.create_initialization_options())
 
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main())

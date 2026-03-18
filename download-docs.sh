@@ -84,6 +84,38 @@ dl_sparse() {
     fi
 }
 
+# Для репозиториев с конкретной веткой (например Qt 5.15 LTS)
+dl_branch() {
+    local url="$1" branch="$2" sub="$3" name="$4" lang="$5" cat="$6"
+    local repo=$(basename "$url" .git)
+    local target="$DOCS/${repo}-${branch}"
+    echo -e "\n📥 $name (branch: $branch)..."
+    local needs_ingest=1
+    if [ -d "$target" ]; then
+        local old_head new_head
+        old_head=$(cd "$target" && git rev-parse HEAD 2>/dev/null)
+        (cd "$target" && git pull --quiet 2>/dev/null) || true
+        new_head=$(cd "$target" && git rev-parse HEAD 2>/dev/null)
+        if [ "$old_head" = "$new_head" ]; then
+            echo "  ✓ up to date, skip ingest"
+            needs_ingest=0
+        fi
+    else
+        git clone --depth 1 --branch "$branch" --quiet "$url" "$target" 2>/dev/null || { echo "  ⚠ clone failed: $url (branch: $branch)"; return; }
+    fi
+    if [ "$needs_ingest" -eq 1 ]; then
+        local path="$target"
+        [ -n "$sub" ] && path="$target/$sub"
+        if [ -d "$path" ]; then
+            local extra_args=""
+            [ -n "$cat" ] && extra_args="--category $cat"
+            "$VENV" "$INGEST" --path "$path" --source "$name" --language "$lang" $extra_args || echo "  ⚠ ingest failed"
+        else
+            echo "  ⚠ path not found: $path"
+        fi
+    fi
+}
+
 # ═══════════════════════════════════════════════════════════════════
 #  PYTHON
 # ═══════════════════════════════════════════════════════════════════
@@ -156,10 +188,10 @@ do_cpp() {
     # --- Стандарты и гайдлайны ---
     # C++ Core Guidelines (Stroustrup, Sutter)
     dl "https://github.com/isocpp/CppCoreGuidelines"    ""              "C++ Core Guidelines"   cpp ""
-    # SEI CERT C Coding Standard — безопасное написание кода на C
-    dl "https://github.com/SEI-CERT/secure-c-coding-standard" ""        "CERT C Coding Standard" c ""
-    # C FAQ — часто задаваемые вопросы по C (Harbison & Steele стиль)
-    dl "https://github.com/mackyle/cstdfaq"             ""              "C Standard FAQ"        c  ""
+    # C Style Guide — чёткие правила написания кода на C (mcinglis)
+    dl "https://github.com/mcinglis/c-style"            ""              "C Style Guide"         c  ""
+    # C/C++ Links — обширная коллекция ресурсов: стандарты, оптимизация, безопасность
+    dl "https://github.com/MattPD/cpplinks"             ""              "C/C++ Resource Links"  cpp ""
 
     # --- Популярные библиотеки C++ ---
     # Abseil — утилиты от Google (строки, хеши, синхронизация)
@@ -263,6 +295,16 @@ do_qt() {
     dl "https://github.com/qt/qtserialport"             "examples"      "Qt SerialPort Examples" cpp "qt"
     # Qt Network Auth (OAuth)
     dl "https://github.com/qt/qtnetworkauth"            "examples"      "Qt NetworkAuth Examples" cpp "qt"
+
+    # --- Qt 5.15 LTS ---
+    # Qt 5.15 — последняя LTS-ветка Qt 5, широко используется в production
+    dl_branch "https://github.com/qt/qtbase"        "5.15" "src"      "Qt 5.15 Base Sources"       cpp "qt"
+    dl_branch "https://github.com/qt/qtbase"        "5.15" "examples" "Qt 5.15 Base Examples"      cpp "qt"
+    # Qt 5.15 документация (qtdoc: Getting Started, Best Practices, Qt modules overview)
+    dl_branch "https://github.com/qt/qtdoc"         "5.15" "doc"      "Qt 5.15 Documentation"      cpp "qt"
+    # Qt 5.15 QML / Qt Quick
+    dl_branch "https://github.com/qt/qtdeclarative" "5.15" "src"      "Qt 5.15 QML Sources"        cpp "qt"
+    dl_branch "https://github.com/qt/qtdeclarative" "5.15" "examples" "Qt 5.15 QML Examples"       cpp "qt"
 
     # --- Книги ---
     # Книга Qt6 + Modern C++

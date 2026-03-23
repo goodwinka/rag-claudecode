@@ -42,12 +42,27 @@ else
     echo "  ✓ PyTorch CPU"
 fi
 
-# 3. Загрузка встроенных баз знаний
-echo -e "\n📚 [3/4] Загрузка встроенных баз знаний..."
+# 3. Предзагрузка модели эмбеддингов в кэш HF Hub
+echo -e "\n🤖 [3/5] Предзагрузка модели эмбеддингов..."
+python -c "
+import os, sys
+model = os.environ.get('RAG_EMBED_MODEL', 'all-MiniLM-L6-v2')
+model_id = model if '/' in model else f'sentence-transformers/{model}'
+try:
+    from huggingface_hub import snapshot_download
+    snapshot_download(repo_id=model_id)
+    print(f'  Модель {model_id} скачана и закэширована')
+except Exception as e:
+    print(f'  Не удалось предзагрузить модель: {e}', file=sys.stderr)
+    sys.exit(1)
+"
+
+# 4. Загрузка встроенных баз знаний
+echo -e "\n📚 [4/5] Загрузка встроенных баз знаний..."
 python "$SCRIPT_DIR/ingest.py" --load-all
 
-# 4. Статистика
-echo -e "\n📊 [4/4] Статистика:"
+# 5. Статистика
+echo -e "\n📊 [5/5] Статистика:"
 python "$SCRIPT_DIR/ingest.py" --stats
 
 echo -e "\n═══════════════════════════════════════════════════"

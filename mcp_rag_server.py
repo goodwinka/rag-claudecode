@@ -49,18 +49,29 @@ _embedding_function = None
 
 
 def _enable_offline_if_cached(model_name: str) -> None:
-    """Включает оффлайн-режим HF Hub если модель уже есть в локальном кэше."""
-    try:
-        from huggingface_hub import scan_cache_dir
-        model_id = model_name if "/" in model_name else f"sentence-transformers/{model_name}"
-        cache_info = scan_cache_dir()
-        for repo in cache_info.repos:
-            if repo.repo_id == model_id:
-                os.environ.setdefault("HF_HUB_OFFLINE", "1")
-                os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-                break
-    except Exception:
-        pass
+    """Включает оффлайн-режим HF Hub если модель есть в локальном кэше.
+
+    Проверяет файловую систему напрямую — без сетевых вызовов.
+    Поддерживает оба варианта кэша: HF Hub и sentence-transformers.
+    """
+    model_id = model_name if "/" in model_name else f"sentence-transformers/{model_name}"
+
+    # 1. HF Hub cache: $HUGGINGFACE_HUB_CACHE или $HF_HOME/hub или ~/.cache/huggingface/hub
+    hf_hub_cache = Path(
+        os.environ.get("HUGGINGFACE_HUB_CACHE")
+        or os.path.join(
+            os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface")), "hub"
+        )
+    )
+    snapshots_dir = hf_hub_cache / ("models--" + model_id.replace("/", "--")) / "snapshots"
+    hf_cached = snapshots_dir.exists() and any(snapshots_dir.iterdir())
+
+    # 2. Sentence-transformers legacy cache: ~/.cache/torch/sentence_transformers/
+    st_cache = Path.home() / ".cache" / "torch" / "sentence_transformers" / model_id.replace("/", "_")
+
+    if hf_cached or st_cache.exists():
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+        os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 
 def _get_embedding_function():

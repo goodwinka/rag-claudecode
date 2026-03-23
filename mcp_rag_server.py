@@ -47,6 +47,22 @@ VALID_CATEGORIES = [
 
 _embedding_function = None
 
+
+def _enable_offline_if_cached(model_name: str) -> None:
+    """Включает оффлайн-режим HF Hub если модель уже есть в локальном кэше."""
+    try:
+        from huggingface_hub import scan_cache_dir
+        model_id = model_name if "/" in model_name else f"sentence-transformers/{model_name}"
+        cache_info = scan_cache_dir()
+        for repo in cache_info.repos:
+            if repo.repo_id == model_id:
+                os.environ.setdefault("HF_HUB_OFFLINE", "1")
+                os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+                break
+    except Exception:
+        pass
+
+
 def _get_embedding_function():
     """Создаёт и кеширует функцию эмбеддингов с GPU если доступно."""
     global _embedding_function
@@ -62,6 +78,7 @@ def _get_embedding_function():
     except ImportError:
         pass
     model = os.environ.get("RAG_EMBED_MODEL", "all-MiniLM-L6-v2")
+    _enable_offline_if_cached(model)
     _embedding_function = SentenceTransformerEmbeddingFunction(
         model_name=model,
         device=device,

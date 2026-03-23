@@ -133,8 +133,23 @@ async def _query_collection(collection, **kwargs) -> dict:
     для общения с embedded-сервером. Вызов синхронного httpx из async-
     контекста конфликтует с event loop и приводит к
     RuntimeError: cannot send a request as the client has been closed.
+
+    Автоматически снимает where=None (chromadb трактует его как фильтр по
+    null-метаданным, а не как «без фильтра») и делает повторный запрос без
+    where при InternalError «Error finding id» (категория отсутствует в БД).
     """
-    return await asyncio.to_thread(collection.query, **kwargs)
+    # Не передавать where=None — в ряде версий chromadb это не «без фильтра»
+    if kwargs.get("where") is None:
+        kwargs.pop("where", None)
+
+    try:
+        return await asyncio.to_thread(collection.query, **kwargs)
+    except Exception as e:
+        if "Error finding id" in str(e) and "where" in kwargs:
+            # Категория не представлена в БД — повторяем без фильтра
+            kw = {k: v for k, v in kwargs.items() if k != "where"}
+            return await asyncio.to_thread(collection.query, **kw)
+        raise
 
 
 async def _get_collection_async() -> Any:

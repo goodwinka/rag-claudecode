@@ -11,7 +11,7 @@
        ├──▶ llama-swap:8080 ──▶ llama-server (ваша модель)
        │          (генерация кода)
        │
-       └──▶ MCP RAG Server (mcp_rag_server.py)
+       └──▶ MCP RAG Server (mcp_rag_server.py / Docker)
                  │
                  ├── search_docs       — общий поиск
                  ├── search_api        — API справочник
@@ -19,10 +19,10 @@
                  ├── search_qt         — Qt документация
                  ├── search_technical  — форматы, сборка, протоколы
                  │
-                 └── ChromaDB (~/.rag-knowledge-base/)
+                 └── ChromaDB (.rag-knowledge-base/)
 ```
 
-## Быстрый старт
+## Быстрый старт (без Docker)
 
 ```bash
 cd rag-for-claude-code
@@ -72,7 +72,150 @@ python ingest.py --stats
 python ingest.py --clear
 ```
 
-## Подключение к Claude Code
+## Запуск в контейнере (Docker)
+
+### Сборка образа
+
+```bash
+# CPU (по умолчанию)
+docker compose build
+
+# GPU — CUDA 12.1
+docker compose build --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121
+
+# GPU — CUDA 12.4
+docker compose build --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
+```
+
+При сборке GPU-образа также раскомментируйте `build.args` и секцию `deploy` в
+`docker-compose.yml`.
+
+### Первичная загрузка базы знаний
+
+```bash
+# Загрузить встроенные базы (knowledge/)
+docker compose run --rm rag-ingest --load-all
+
+# Загрузить внешнюю документацию из .external-docs/
+docker compose run --rm rag-ingest --path /app/.external-docs --source "External"
+
+# Статистика
+docker compose run --rm rag-ingest --stats
+
+# Очистка
+docker compose run --rm rag-ingest --clear
+```
+
+При первом запуске MCP-сервера `AUTO_INGEST=true` автоматически загружает
+встроенные базы знаний, если ChromaDB пуста.
+
+### Структура томов
+
+По умолчанию все пути — **относительно `docker-compose.yml`**:
+
+```
+rag-claudecode/
+├── docker-compose.yml
+├── knowledge/               → монтируется в /app/knowledge
+├── .external-docs/          → монтируется в /app/.external-docs
+└── .rag-knowledge-base/     → монтируется в /data/chroma_db  (создаётся автоматически)
+```
+
+---
+
+### Режим 1: Claude Code на хосте (stdio через docker run)
+
+```bash
+claude mcp add rag-kb -- docker run --rm -i \
+  -v "$(pwd)/knowledge:/app/knowledge" \
+  -v "$(pwd)/.external-docs:/app/.external-docs" \
+  -v "$(pwd)/.rag-knowledge-base:/data/chroma_db" \
+  rag-claudecode
+```
+
+Или в `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "rag-kb": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "-v", "/абсолютный/путь/knowledge:/app/knowledge",
+        "-v", "/абсолютный/путь/.external-docs:/app/.external-docs",
+        "-v", "/абсолютный/путь/.rag-knowledge-base:/data/chroma_db",
+        "rag-claudecode"
+      ]
+    }
+  }
+}
+```
+
+---
+
+### Режим 2: Claude Code в контейнере (HTTP/SSE через сеть)
+
+Запустите MCP-сервер как постоянный сервис:
+
+```bash
+docker compose up -d rag-mcp
+```
+
+Добавьте контейнер с Claude Code в ту же сеть (`rag-net`) в его
+`docker-compose.yml`:
+
+```yaml
+services:
+  claude-code:
+    # ...
+    networks:
+      - rag-net
+
+networks:
+  rag-net:
+    external: true   # сеть создана rag-claudecode/docker-compose.yml
+```
+
+Укажите MCP-сервер по URL в `.mcp.json` внутри контейнера:
+
+```json
+{
+  "mcpServers": {
+    "rag-kb": {
+      "url": "http://rag-mcp:8765/sse"
+    }
+  }
+}
+```
+
+Или через CLI:
+
+```bash
+claude mcp add --transport sse rag-kb http://rag-mcp:8765/sse
+```
+
+Проверка работоспособности:
+
+```bash
+curl http://localhost:8765/health   # с хоста
+curl http://rag-mcp:8765/health     # из контейнера в той же сети
+```
+
+---
+
+### Переменные окружения контейнера
+
+| Переменная | По умолчанию | Описание |
+|---|---|---|
+| `MCP_TRANSPORT` | `stdio` | Транспорт: `stdio` или `http` |
+| `MCP_HOST` | `0.0.0.0` | Адрес HTTP-сервера |
+| `MCP_PORT` | `8765` | Порт HTTP-сервера |
+| `AUTO_INGEST` | `true` | Загружать knowledge/ при пустой DB |
+
+---
+
+## Подключение к Claude Code (без Docker)
 
 ```bash
 claude mcp add rag-kb -- \
@@ -138,6 +281,9 @@ models:
 | `RAG_MAX_DISTANCE` | `1.5` | Порог релевантности |
 | `RAG_CHUNK_SIZE` | `1200` | Размер чанка |
 | `RAG_CHUNK_OVERLAP` | `150` | Перекрытие чанков |
+| `MCP_TRANSPORT` | `stdio` | Транспорт: `stdio` или `http` |
+| `MCP_HOST` | `0.0.0.0` | Адрес прослушивания HTTP-сервера |
+| `MCP_PORT` | `8765` | Порт HTTP-сервера |
 
 ## Автообновление (cron)
 
@@ -150,18 +296,21 @@ models:
 
 ```
 rag-for-claude-code/
-├── mcp_rag_server.py          # MCP-сервер (7 инструментов)
+├── mcp_rag_server.py          # MCP-сервер (17 инструментов)
 ├── ingest.py                  # Загрузка документации
-├── setup.sh                   # Установка
+├── setup.sh                   # Установка (без Docker)
 ├── download-docs.sh           # Скачивание внешних доков
+├── Dockerfile                 # Образ контейнера
+├── docker-compose.yml         # Сервисы с монтированием томов
+├── entrypoint.sh              # Точка входа контейнера
 ├── CLAUDE.md                  # Инструкции для модели
 ├── requirements.txt
-├── knowledge/                 # Встроенные базы знаний
+├── knowledge/                 # Встроенные базы знаний (том: /app/knowledge)
 │   ├── c/                     # C: память, POSIX, сокеты
 │   ├── cpp/                   # C++: STL, шаблоны, RAII
-│   ├── python/                # Python: stdlib, async, typing
-│   ├── qt/                    # Qt: виджеты, MVC, QML, сеть
 │   ├── algorithms/            # Алгоритмы и структуры данных
+│   ├── qt/                    # Qt: виджеты, MVC, QML, сеть
 │   └── technical/             # Форматы, сборка, протоколы
-└── .external-docs/            # Скачанная внешняя документация
+├── .external-docs/            # Внешняя документация (том: /app/.external-docs)
+└── .rag-knowledge-base/       # ChromaDB данные (том: /data/chroma_db)
 ```

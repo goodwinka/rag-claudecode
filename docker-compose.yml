@@ -1,0 +1,86 @@
+networks:
+  # Подключите контейнер с Claude Code к этой же сети:
+  #   networks: [rag-net]
+  rag-net:
+    driver: bridge
+
+services:
+
+  # ─── MCP-сервер: HTTP/SSE ────────────────────────────────────────────────────
+  # Запуск:  docker compose up -d rag-mcp
+  # URL для подключения из контейнера: http://rag-mcp:8765/sse
+  # URL для подключения с хоста:       http://localhost:8765/sse
+  rag-mcp:
+    build:
+      context: .
+      # ── GPU CUDA 12.1 — раскомментировать ──────────────────────────────────
+      # args:
+      #   TORCH_INDEX_URL: https://download.pytorch.org/whl/cu121
+    image: rag-claudecode
+    networks:
+      - rag-net
+    ports:
+      - "8765:8765"
+    volumes:
+      # Все пути — относительно этого файла
+      - ./knowledge:/app/knowledge
+      - ./.external-docs:/app/.external-docs
+      - ./.rag-knowledge-base:/data/chroma_db
+    environment:
+      RAG_DB_PATH: /data/chroma_db
+      RAG_COLLECTION: programming_docs
+      RAG_TOP_K: "10"
+      RAG_MAX_DISTANCE: "1.5"
+      MCP_TRANSPORT: http
+      MCP_PORT: "8765"
+      # AUTO_INGEST=true — загружает knowledge/ при первом запуске (пустой DB)
+      AUTO_INGEST: "true"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8765/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    # ── GPU (NVIDIA) — раскомментировать вместе с build.args выше ─────────────
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # ─── MCP-сервер: stdio (для подключения без сети, через docker run) ──────────
+  # claude mcp add rag-kb -- docker run --rm -i \
+  #   -v "$(pwd)/knowledge:/app/knowledge" \
+  #   -v "$(pwd)/.external-docs:/app/.external-docs" \
+  #   -v "$(pwd)/.rag-knowledge-base:/data/chroma_db" \
+  #   rag-claudecode
+  #
+  # Этот сервис описан только для справки — используйте docker run напрямую.
+
+  # ─── Загрузка / переиндексация документации ─────────────────────────────────
+  # docker compose run --rm rag-ingest --load-all
+  # docker compose run --rm rag-ingest --path /app/.external-docs --source "External"
+  # docker compose run --rm rag-ingest --stats
+  # docker compose run --rm rag-ingest --clear
+  rag-ingest:
+    build:
+      context: .
+    image: rag-claudecode
+    volumes:
+      - ./knowledge:/app/knowledge
+      - ./.external-docs:/app/.external-docs
+      - ./.rag-knowledge-base:/data/chroma_db
+    environment:
+      RAG_DB_PATH: /data/chroma_db
+      RAG_COLLECTION: programming_docs
+      AUTO_INGEST: "false"
+    entrypoint: ["python", "ingest.py"]
+    command: ["--load-all"]
+    networks:
+      - rag-net
+    profiles:
+      - ingest

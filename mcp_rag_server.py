@@ -958,14 +958,59 @@ def _build_filter(language: str = "", category: str = "") -> dict | None:
 
 # ─── Запуск ──────────────────────────────────────────────────────
 
+async def _run_http_server() -> None:
+    """HTTP/SSE транспорт — для подключения из другого контейнера."""
+    try:
+        from mcp.server.sse import SseServerTransport
+        from starlette.applications import Starlette
+        from starlette.requests import Request
+        from starlette.responses import JSONResponse
+        from starlette.routing import Route
+        import uvicorn
+    except ImportError as exc:
+        print(f"HTTP транспорт требует starlette и uvicorn: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    host = os.environ.get("MCP_HOST", "0.0.0.0")
+    port = int(os.environ.get("MCP_PORT", "8765"))
+
+    sse = SseServerTransport("/messages/")
+
+    async def handle_sse(request: Request):
+        async with sse.connect_sse(
+            request.scope, request.receive, request._send
+        ) as streams:
+            await app.run(streams[0], streams[1], app.create_initialization_options())
+
+    async def health(request: Request):
+        return JSONResponse({"status": "ok"})
+
+    starlette_app = Starlette(
+        routes=[
+            Route("/health", endpoint=health),
+            Route("/sse", endpoint=handle_sse),
+            Route("/messages/", endpoint=sse.handle_post_message, methods=["POST"]),
+        ]
+    )
+
+    print(f"MCP RAG сервер (HTTP): http://{host}:{port}/sse", file=sys.stderr)
+    config = uvicorn.Config(starlette_app, host=host, port=port, log_level="warning")
+    server = uvicorn.Server(config)
+    await server.serve()
+
+
 async def main():
     # Прогреваем коллекцию и embedding-модель до старта сервера.
     # Это гарантирует, что httpx-клиент chromadb и загрузка модели
     # происходят в thread pool и не конфликтуют с event loop MCP.
     await asyncio.to_thread(get_collection)
 
-    async with stdio_server() as (read_stream, write_stream):
-        await app.run(read_stream, write_stream, app.create_initialization_options())
+    transport = os.environ.get("MCP_TRANSPORT", "stdio").lower()
+    if transport == "http":
+        await _run_http_server()
+    else:
+        async with stdio_server() as (read_stream, write_stream):
+            await app.run(read_stream, write_stream, app.create_initialization_options())
 
 if __name__ == "__main__":
     asyncio.run(main())

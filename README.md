@@ -77,8 +77,18 @@ python ingest.py --clear
 ### Сборка образа
 
 ```bash
+# CPU (по умолчанию)
 docker compose build
+
+# GPU — CUDA 12.1
+docker compose build --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121
+
+# GPU — CUDA 12.4
+docker compose build --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
 ```
+
+При сборке GPU-образа также раскомментируйте `build.args` и секцию `deploy` в
+`docker-compose.yml`.
 
 ### Первичная загрузка базы знаний
 
@@ -101,7 +111,7 @@ docker compose run --rm rag-ingest --clear
 
 ### Структура томов
 
-По умолчанию все данные берутся из папок **рядом с `docker-compose.yml`**:
+По умолчанию все пути — **относительно `docker-compose.yml`**:
 
 ```
 rag-claudecode/
@@ -111,10 +121,11 @@ rag-claudecode/
 └── .rag-knowledge-base/     → монтируется в /data/chroma_db  (создаётся автоматически)
 ```
 
-### Подключение к Claude Code (Docker)
+---
+
+### Режим 1: Claude Code на хосте (stdio через docker run)
 
 ```bash
-# Добавить MCP-сервер через docker run
 claude mcp add rag-kb -- docker run --rm -i \
   -v "$(pwd)/knowledge:/app/knowledge" \
   -v "$(pwd)/.external-docs:/app/.external-docs" \
@@ -122,7 +133,7 @@ claude mcp add rag-kb -- docker run --rm -i \
   rag-claudecode
 ```
 
-Или вручную в `~/.claude/claude_desktop_config.json` / `.mcp.json`:
+Или в `.mcp.json`:
 
 ```json
 {
@@ -141,10 +152,65 @@ claude mcp add rag-kb -- docker run --rm -i \
 }
 ```
 
+---
+
+### Режим 2: Claude Code в контейнере (HTTP/SSE через сеть)
+
+Запустите MCP-сервер как постоянный сервис:
+
+```bash
+docker compose up -d rag-mcp
+```
+
+Добавьте контейнер с Claude Code в ту же сеть (`rag-net`) в его
+`docker-compose.yml`:
+
+```yaml
+services:
+  claude-code:
+    # ...
+    networks:
+      - rag-net
+
+networks:
+  rag-net:
+    external: true   # сеть создана rag-claudecode/docker-compose.yml
+```
+
+Укажите MCP-сервер по URL в `.mcp.json` внутри контейнера:
+
+```json
+{
+  "mcpServers": {
+    "rag-kb": {
+      "url": "http://rag-mcp:8765/sse"
+    }
+  }
+}
+```
+
+Или через CLI:
+
+```bash
+claude mcp add --transport sse rag-kb http://rag-mcp:8765/sse
+```
+
+Проверка работоспособности:
+
+```bash
+curl http://localhost:8765/health   # с хоста
+curl http://rag-mcp:8765/health     # из контейнера в той же сети
+```
+
+---
+
 ### Переменные окружения контейнера
 
 | Переменная | По умолчанию | Описание |
 |---|---|---|
+| `MCP_TRANSPORT` | `stdio` | Транспорт: `stdio` или `http` |
+| `MCP_HOST` | `0.0.0.0` | Адрес HTTP-сервера |
+| `MCP_PORT` | `8765` | Порт HTTP-сервера |
 | `AUTO_INGEST` | `true` | Загружать knowledge/ при пустой DB |
 
 ---
@@ -215,6 +281,9 @@ models:
 | `RAG_MAX_DISTANCE` | `1.5` | Порог релевантности |
 | `RAG_CHUNK_SIZE` | `1200` | Размер чанка |
 | `RAG_CHUNK_OVERLAP` | `150` | Перекрытие чанков |
+| `MCP_TRANSPORT` | `stdio` | Транспорт: `stdio` или `http` |
+| `MCP_HOST` | `0.0.0.0` | Адрес прослушивания HTTP-сервера |
+| `MCP_PORT` | `8765` | Порт HTTP-сервера |
 
 ## Автообновление (cron)
 

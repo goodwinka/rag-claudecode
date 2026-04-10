@@ -7,9 +7,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# PyTorch CPU (без CUDA — меньший размер образа)
-# Для GPU: замените на --index-url https://download.pytorch.org/whl/cu121
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+# ── PyTorch ──────────────────────────────────────────────────────────────────
+# Передайте TORCH_INDEX_URL при сборке для выбора варианта:
+#   CPU (по умолчанию):
+#     docker build .
+#   CUDA 12.1:
+#     docker build --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121 .
+#   CUDA 12.4:
+#     docker build --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124 .
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir torch --index-url ${TORCH_INDEX_URL}
 
 # Python зависимости
 COPY requirements.txt .
@@ -24,9 +31,9 @@ COPY mcp_rag_server.py ingest.py ./
 # Встроенные базы знаний (могут быть переопределены монтированием)
 COPY knowledge/ knowledge/
 
-# Точки монтирования внешних данных
-# /data/chroma_db   — база ChromaDB (персистентная)
-# /app/.external-docs — скачанная внешняя документация
+# Точки монтирования:
+#   /data/chroma_db      — ChromaDB (персистентная)
+#   /app/.external-docs  — скачанная внешняя документация
 
 ENV RAG_DB_PATH=/data/chroma_db
 ENV RAG_COLLECTION=programming_docs
@@ -34,6 +41,10 @@ ENV RAG_TOP_K=10
 ENV RAG_MAX_DISTANCE=1.5
 ENV RAG_CHUNK_SIZE=1200
 ENV RAG_CHUNK_OVERLAP=150
+# Транспорт: stdio (по умолчанию) | http
+ENV MCP_TRANSPORT=stdio
+ENV MCP_HOST=0.0.0.0
+ENV MCP_PORT=8765
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

@@ -1,0 +1,47 @@
+services:
+
+  # ─── MCP-сервер (stdio транспорт) ───────────────────────────────────────────
+  # Используется через `docker run` в конфигурации MCP-клиента.
+  # Этот сервис удобен для сборки образа и ручного тестирования.
+  rag-mcp:
+    build: .
+    image: rag-claudecode
+    stdin_open: true
+    tty: false
+    volumes:
+      # Встроенные базы знаний (папка рядом с этим файлом)
+      - ./knowledge:/app/knowledge
+      # Скачанная внешняя документация
+      - ./.external-docs:/app/.external-docs
+      # Персистентная ChromaDB (данные сохраняются между перезапусками)
+      - ./.rag-knowledge-base:/data/chroma_db
+    environment:
+      RAG_DB_PATH: /data/chroma_db
+      RAG_COLLECTION: programming_docs
+      RAG_TOP_K: "10"
+      RAG_MAX_DISTANCE: "1.5"
+      # AUTO_INGEST=true — загружает knowledge/ при первом запуске (пустой DB)
+      AUTO_INGEST: "true"
+
+  # ─── Загрузка / переиндексация документации ─────────────────────────────────
+  # Запускается отдельно: docker compose run --rm rag-ingest [аргументы]
+  # Примеры:
+  #   docker compose run --rm rag-ingest --load-all
+  #   docker compose run --rm rag-ingest --path /app/.external-docs --source "MyDocs"
+  #   docker compose run --rm rag-ingest --stats
+  #   docker compose run --rm rag-ingest --clear
+  rag-ingest:
+    build: .
+    image: rag-claudecode
+    volumes:
+      - ./knowledge:/app/knowledge
+      - ./.external-docs:/app/.external-docs
+      - ./.rag-knowledge-base:/data/chroma_db
+    environment:
+      RAG_DB_PATH: /data/chroma_db
+      RAG_COLLECTION: programming_docs
+      AUTO_INGEST: "false"
+    entrypoint: ["python", "ingest.py"]
+    command: ["--load-all"]
+    profiles:
+      - ingest

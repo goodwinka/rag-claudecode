@@ -964,8 +964,8 @@ async def _run_http_server() -> None:
         from mcp.server.sse import SseServerTransport
         from starlette.applications import Starlette
         from starlette.requests import Request
-        from starlette.responses import JSONResponse
-        from starlette.routing import Route
+        from starlette.responses import JSONResponse, Response
+        from starlette.routing import Mount, Route
         import uvicorn
     except ImportError as exc:
         print(f"HTTP транспорт требует starlette и uvicorn: {exc}", file=sys.stderr)
@@ -981,6 +981,7 @@ async def _run_http_server() -> None:
             request.scope, request.receive, request._send
         ) as streams:
             await app.run(streams[0], streams[1], app.create_initialization_options())
+        return Response()
 
     async def health(request: Request):
         return JSONResponse({"status": "ok"})
@@ -989,7 +990,7 @@ async def _run_http_server() -> None:
         routes=[
             Route("/health", endpoint=health),
             Route("/sse", endpoint=handle_sse),
-            Route("/messages/", endpoint=sse.handle_post_message, methods=["POST"]),
+            Mount("/messages/", app=sse.handle_post_message),
         ]
     )
 
